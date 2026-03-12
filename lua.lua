@@ -17,7 +17,12 @@ local POLL_INTERVAL = 0.25
 local AUTH_REFRESH_MARGIN = 300
 local MAX_LOG_LINES = 120
 local CLAIM_TIMEOUT = 60
-local OUTFIT_APPLY_TIMEOUT = 8
+
+-- apply/read tuning
+local OUTFIT_READ_WINDOW = 4.5
+local OUTFIT_POLL_STEP = 0.12
+local OUTFIT_STABLE_POLLS = 2
+local BETWEEN_OUTFITS_DELAY = 0.8
 
 local CommunityRemote = ReplicatedStorage:WaitForChild("CommunityOutfitsRemote", 8)
 local CatalogGuiRemote = ReplicatedStorage:WaitForChild("CatalogGuiRemote", 8)
@@ -39,8 +44,8 @@ local function optimizeGraphics()
 
     Lighting.GlobalShadows = false
     Lighting.Brightness = 1
-    Lighting.Ambient = Color3.new(1, 1, 1)
-    Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+    Lighting.Ambient = Color3.new(1,1,1)
+    Lighting.OutdoorAmbient = Color3.new(1,1,1)
     Lighting.EnvironmentDiffuseScale = 0
     Lighting.EnvironmentSpecularScale = 0
     Lighting.Technology = Enum.Technology.Compatibility
@@ -93,9 +98,9 @@ local function createCleanLogger()
     frame.BorderSizePixel = 0
 
     local logBox = Instance.new("TextLabel", frame)
-    logBox.Size = UDim2.fromScale(1, 1)
+    logBox.Size = UDim2.fromScale(1,1)
     logBox.BackgroundTransparency = 1
-    logBox.TextColor3 = Color3.new(1, 1, 1)
+    logBox.TextColor3 = Color3.new(1,1,1)
     logBox.Font = Enum.Font.Code
     logBox.TextSize = 13.5
     logBox.TextXAlignment = Enum.TextXAlignment.Left
@@ -115,9 +120,9 @@ local function createCleanLogger()
 
     local kill = Instance.new("TextButton", frame)
     kill.Size = UDim2.fromOffset(86, 26)
-    kill.Position = UDim2.new(1, -94, 0, 6)
+    kill.Position = UDim2.new(1,-94,0,6)
     kill.BackgroundColor3 = Color3.fromRGB(210, 60, 60)
-    kill.TextColor3 = Color3.new(1, 1, 1)
+    kill.TextColor3 = Color3.new(1,1,1)
     kill.Font = Enum.Font.Code
     kill.TextSize = 13
     kill.Text = "STOP"
@@ -136,49 +141,37 @@ local request_impl = (syn and syn.request) or (http and http.request) or (reques
 
 local function http_req(method, url, body)
     if not request_impl then return nil end
-
     local success, response = pcall(request_impl, {
         Url = url,
         Method = method,
-        Headers = {
-            ["Content-Type"] = "application/json",
-            ["User-Agent"] = "Roblox/WinInet"
-        },
+        Headers = {["Content-Type"] = "application/json", ["User-Agent"] = "Roblox/WinInet"},
         Body = body and HttpService:JSONEncode(body) or nil
     })
-
     if not success or not response or response.StatusCode < 200 or response.StatusCode > 299 then
         return nil
     end
-
     local ok, json = pcall(HttpService.JSONDecode, HttpService, response.Body)
     return ok and json or nil
 end
 
 local function refreshAuthToken()
     log("Refreshing Firebase token...")
-    local data = http_req("POST", "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" .. API_KEY, {
-        returnSecureToken = true
-    })
-
+    local data = http_req("POST", "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key="..API_KEY, {returnSecureToken = true})
     if not data or not data.idToken then
         log("Firebase auth failed")
         return false
     end
-
     currentIdToken = data.idToken
-    tokenExpiresAt = tick() + (data.expiresIn or 3600) - AUTH_REFRESH_MARGIN
+    tokenExpiresAt = tick() + (tonumber(data.expiresIn) or 3600) - AUTH_REFRESH_MARGIN
     log("Token refreshed")
     return true
 end
 
 local function getRequests()
     if tick() > tokenExpiresAt then
-        if not refreshAuthToken() then
-            return {}
-        end
+        if not refreshAuthToken() then return {} end
     end
-    return http_req("GET", FIREBASE_URL .. "/requests.json?auth=" .. currentIdToken) or {}
+    return http_req("GET", FIREBASE_URL.."/requests.json?auth="..currentIdToken) or {}
 end
 
 local function patch(requestId, data)
@@ -186,9 +179,7 @@ local function patch(requestId, data)
     local success, resp = pcall(request_impl, {
         Url = url,
         Method = "PATCH",
-        Headers = {
-            ["Content-Type"] = "application/json"
-        },
+        Headers = {["Content-Type"] = "application/json"},
         Body = HttpService:JSONEncode(data)
     })
     return success and resp and resp.StatusCode >= 200 and resp.StatusCode < 300
@@ -213,12 +204,9 @@ local function tryClaim(requestId)
         processing = true
     }
 
-    if not patch(requestId, claimData) then
-        return false
-    end
+    if not patch(requestId, claimData) then return false end
 
-    task.wait(0.05 + math.random(0, 50) / 1000)
-
+    task.wait(0.05 + math.random(0, 50)/1000)
     local after = http_req("GET", url)
     if not after or after.claimedBy ~= MY_USER_ID then
         log("Claim lost race → " .. requestId)
@@ -230,12 +218,11 @@ local function tryClaim(requestId)
     else
         log("Claimed → " .. requestId)
     end
-
     return true
 end
 
 local function sendResult(id, payload)
-    if patch(id, { result = payload }) then
+    if patch(id, {result = payload}) then
         log("Result sent for " .. id)
     else
         log("Failed to send result for " .. id)
@@ -244,11 +231,7 @@ end
 
 local function forceResetCharacter()
     pcall(function()
-        CatalogGuiRemote:InvokeServer({
-            Action = "MorphIntoPlayer",
-            UserId = Player.UserId,
-            RigType = Enum.HumanoidRigType.R15
-        })
+        CatalogGuiRemote:InvokeServer({Action = "MorphIntoPlayer", UserId = Player.UserId, RigType = Enum.HumanoidRigType.R15})
         UpdateStatusRemote:FireServer("None")
     end)
     log("Character reset")
@@ -272,157 +255,165 @@ local function getUsername(userIdStr)
     end
 end
 
-local function snapshotDescription(desc)
-    if not desc then return nil end
-
-    local snap = {
-        Shirt = desc.Shirt or 0,
-        Pants = desc.Pants or 0,
-        GraphicTShirt = desc.GraphicTShirt or 0,
-
-        Head = desc.Head or 0,
-        Torso = desc.Torso or 0,
-        LeftArm = desc.LeftArm or 0,
-        RightArm = desc.RightArm or 0,
-        LeftLeg = desc.LeftLeg or 0,
-        RightLeg = desc.RightLeg or 0,
-        Face = desc.Face or 0,
-
-        HeadColor = desc.HeadColor and desc.HeadColor:ToHex() or "",
-        TorsoColor = desc.TorsoColor and desc.TorsoColor:ToHex() or "",
-        LeftArmColor = desc.LeftArmColor and desc.LeftArmColor:ToHex() or "",
-        RightArmColor = desc.RightArmColor and desc.RightArmColor:ToHex() or "",
-        LeftLegColor = desc.LeftLegColor and desc.LeftLegColor:ToHex() or "",
-        RightLegColor = desc.RightLegColor and desc.RightLegColor:ToHex() or "",
-
-        HeightScale = desc.HeightScale or 0,
-        WidthScale = desc.WidthScale or 0,
-        HeadScale = desc.HeadScale or 0,
-        DepthScale = desc.DepthScale or 0,
-        ProportionScale = desc.ProportionScale or 0,
-        BodyTypeScale = desc.BodyTypeScale or 0,
-
-        WalkAnimation = desc.WalkAnimation or 0,
-        RunAnimation = desc.RunAnimation or 0,
-        JumpAnimation = desc.JumpAnimation or 0,
-        IdleAnimation = desc.IdleAnimation or 0,
-        FallAnimation = desc.FallAnimation or 0,
-        SwimAnimation = desc.SwimAnimation or 0,
-        ClimbAnimation = desc.ClimbAnimation or 0,
-    }
-
-    local accessories = {}
-    for _, acc in desc:GetAccessories(true) do
-        table.insert(accessories, table.concat({
-            tostring(acc.AssetId or 0),
-            tostring(acc.AccessoryType and acc.AccessoryType.Name or "Unknown"),
-            tostring(acc.IsLayered and true or false),
-            tostring(acc.Order or 0)
-        }, ":"))
-    end
-    table.sort(accessories)
-    snap.Accessories = accessories
-
-    return snap
+local function getCharacterHumanoid(timeout)
+    local deadline = tick() + (timeout or 3)
+    repeat
+        local char = Player.Character
+        if char and char.Parent then
+            local humanoid = char:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                return char, humanoid
+            end
+        end
+        task.wait(0.05)
+    until tick() >= deadline
+    return nil, nil
 end
 
-local function descriptionsEqual(a, b)
-    if a == nil or b == nil then
-        return false
+local function getBestDescription(humanoid)
+    if not humanoid then return nil end
+
+    local ok, applied = pcall(function()
+        return humanoid:GetAppliedDescription()
+    end)
+    if ok and applied then
+        return applied
     end
 
-    for key, value in pairs(a) do
-        local other = b[key]
+    local desc = humanoid:FindFirstChildOfClass("HumanoidDescription")
+    if desc then
+        return desc
+    end
 
-        if type(value) == "table" then
-            if type(other) ~= "table" or #value ~= #other then
-                return false
-            end
-            for i = 1, #value do
-                if value[i] ~= other[i] then
-                    return false
+    return nil
+end
+
+local function buildFingerprint(desc)
+    if not desc then return "nil" end
+
+    local accessoryBits = {}
+    local ok, accessories = pcall(function()
+        return desc:GetAccessories(true)
+    end)
+
+    if ok and accessories then
+        for _, acc in ipairs(accessories) do
+            accessoryBits[#accessoryBits + 1] = table.concat({
+                tostring(acc.AssetId or 0),
+                tostring(acc.AccessoryType and acc.AccessoryType.Name or "Unknown"),
+                tostring(acc.IsLayered and true or false),
+                tostring(acc.Order or 0)
+            }, ":")
+        end
+        table.sort(accessoryBits)
+    end
+
+    return table.concat({
+        tostring(desc.Shirt or 0),
+        tostring(desc.Pants or 0),
+        tostring(desc.GraphicTShirt or 0),
+
+        tostring(desc.Head or 0),
+        tostring(desc.Torso or 0),
+        tostring(desc.LeftArm or 0),
+        tostring(desc.RightArm or 0),
+        tostring(desc.LeftLeg or 0),
+        tostring(desc.RightLeg or 0),
+        tostring(desc.Face or 0),
+
+        desc.HeadColor and desc.HeadColor:ToHex() or "",
+        desc.TorsoColor and desc.TorsoColor:ToHex() or "",
+        desc.LeftArmColor and desc.LeftArmColor:ToHex() or "",
+        desc.RightArmColor and desc.RightArmColor:ToHex() or "",
+        desc.LeftLegColor and desc.LeftLegColor:ToHex() or "",
+        desc.RightLegColor and desc.RightLegColor:ToHex() or "",
+
+        tostring(desc.HeightScale or 0),
+        tostring(desc.WidthScale or 0),
+        tostring(desc.HeadScale or 0),
+        tostring(desc.DepthScale or 0),
+        tostring(desc.ProportionScale or 0),
+        tostring(desc.BodyTypeScale or 0),
+
+        tostring(desc.WalkAnimation or 0),
+        tostring(desc.RunAnimation or 0),
+        tostring(desc.JumpAnimation or 0),
+        tostring(desc.IdleAnimation or 0),
+        tostring(desc.FallAnimation or 0),
+        tostring(desc.SwimAnimation or 0),
+        tostring(desc.ClimbAnimation or 0),
+
+        table.concat(accessoryBits, "|")
+    }, ";")
+end
+
+local function waitForFreshDescription(beforeFingerprint)
+    local deadline = tick() + OUTFIT_READ_WINDOW
+    local stableCount = 0
+    local lastSeenFingerprint = nil
+    local bestHumanoid = nil
+    local bestDesc = nil
+    local changedDesc = nil
+    local changedHumanoid = nil
+
+    repeat
+        local _, humanoid = getCharacterHumanoid(0.8)
+        if humanoid then
+            local desc = getBestDescription(humanoid)
+            if desc then
+                local fp = buildFingerprint(desc)
+
+                bestHumanoid = humanoid
+                bestDesc = desc
+
+                if fp ~= beforeFingerprint then
+                    changedDesc = desc
+                    changedHumanoid = humanoid
+
+                    if fp == lastSeenFingerprint then
+                        stableCount = stableCount + 1
+                    else
+                        lastSeenFingerprint = fp
+                        stableCount = 1
+                    end
+
+                    if stableCount >= OUTFIT_STABLE_POLLS then
+                        return changedHumanoid, changedDesc
+                    end
                 end
             end
-        else
-            if value ~= other then
-                return false
-            end
         end
+
+        task.wait(OUTFIT_POLL_STEP)
+    until tick() >= deadline
+
+    if changedHumanoid and changedDesc then
+        return changedHumanoid, changedDesc
     end
 
-    return true
+    return bestHumanoid, bestDesc
 end
 
-local function waitForOutfitApply(humanoid, previousSnapshot, timeout)
-    local started = tick()
-    local desc = humanoid:FindFirstChildOfClass("HumanoidDescription")
-
-    while tick() - started < timeout do
-        desc = humanoid:FindFirstChildOfClass("HumanoidDescription")
-        if desc then
-            local currentSnapshot = snapshotDescription(desc)
-            if currentSnapshot and not descriptionsEqual(previousSnapshot, currentSnapshot) then
-                task.wait(0.2)
-                return desc
-            end
-        end
-        task.wait(0.1)
+local function descriptionToResult(humanoid, desc)
+    if not humanoid or not desc then
+        return {error = "Failed to read outfit"}
     end
-
-    return humanoid:FindFirstChildOfClass("HumanoidDescription")
-end
-
-local function processSingleOutfit(hexCode, requesterName)
-    local code = tonumber(hexCode, 16)
-    if not code then
-        return { error = "Invalid outfit code" }
-    end
-
-    local char = Player.Character or Player.CharacterAdded:Wait()
-    local humanoid = char:WaitForChild("Humanoid", 3)
-    if not humanoid then
-        return { error = "Humanoid not found" }
-    end
-
-    local beforeDesc = humanoid:FindFirstChildOfClass("HumanoidDescription")
-    local beforeSnapshot = snapshotDescription(beforeDesc)
-
-    log("Processing • " .. requesterName .. " • code: " .. code)
-
-    local success, outfit = pcall(CommunityRemote.InvokeServer, CommunityRemote, {
-        Action = "GetFromOutfitCode",
-        OutfitCode = code
-    })
-    if not success or not outfit then
-        return { error = "Failed to fetch outfit" }
-    end
-
-    local wearSuccess = pcall(CommunityRemote.InvokeServer, CommunityRemote, {
-        Action = "WearCommunityOutfit",
-        OutfitInfo = outfit
-    })
-    if not wearSuccess then
-        return { error = "Failed to wear outfit" }
-    end
-
-    local desc = waitForOutfitApply(humanoid, beforeSnapshot, OUTFIT_APPLY_TIMEOUT)
-    if not desc then
-        return { error = "Outfit apply timed out" }
-    end
-
-    task.wait(0.35)
 
     local otherAcc = {}
-    for _, acc in desc:GetAccessories(true) do
-        local entry = {
-            assetId = acc.AssetId,
-            isLayered = acc.IsLayered,
-            type = acc.AccessoryType.Name
-        }
-        if acc.Order then
-            entry.order = acc.Order
+    local ok, accessories = pcall(function()
+        return desc:GetAccessories(true)
+    end)
+
+    if ok and accessories then
+        for _, acc in ipairs(accessories) do
+            local entry = {
+                assetId = acc.AssetId,
+                isLayered = acc.IsLayered,
+                type = acc.AccessoryType.Name
+            }
+            if acc.Order then entry.order = acc.Order end
+            table.insert(otherAcc, entry)
         end
-        table.insert(otherAcc, entry)
     end
 
     local animations = {
@@ -445,13 +436,8 @@ local function processSingleOutfit(hexCode, requesterName)
             LeftLeg = desc.LeftLegColor:ToHex(),
             RightLeg = desc.RightLegColor:ToHex(),
         },
-        Clothing = {
-            Shirt = desc.Shirt,
-            Pants = desc.Pants
-        },
-        Accessories = {
-            Other = otherAcc
-        },
+        Clothing = {Shirt = desc.Shirt, Pants = desc.Pants},
+        Accessories = {Other = otherAcc},
         Scales = {
             Height = desc.HeightScale,
             Width = desc.WidthScale,
@@ -472,7 +458,57 @@ local function processSingleOutfit(hexCode, requesterName)
         Animations = animations
     }
 
-    log("Done • " .. #otherAcc .. " accessories")
+    return result
+end
+
+local function processSingleOutfit(hexCode, requesterName)
+    local code = tonumber(hexCode, 16)
+    if not code then return {error = "Invalid outfit code"} end
+
+    log("Processing • " .. requesterName .. " • code: " .. code)
+
+    local _, humanoidBefore = getCharacterHumanoid(3)
+    if not humanoidBefore then
+        return {error = "Humanoid not found"}
+    end
+
+    local beforeDesc = getBestDescription(humanoidBefore)
+    local beforeFingerprint = buildFingerprint(beforeDesc)
+
+    local success, outfit = pcall(CommunityRemote.InvokeServer, CommunityRemote, {
+        Action = "GetFromOutfitCode",
+        OutfitCode = code
+    })
+    if not success or not outfit then
+        return {error = "Failed to fetch outfit"}
+    end
+
+    local ok = pcall(CommunityRemote.InvokeServer, CommunityRemote, {
+        Action = "WearCommunityOutfit",
+        OutfitInfo = outfit
+    })
+    if not ok then
+        return {error = "Failed to wear outfit"}
+    end
+
+    -- short settle so we don't instantly read the old fit
+    task.wait(0.18)
+
+    local humanoidAfter, descAfter = waitForFreshDescription(beforeFingerprint)
+    if not humanoidAfter or not descAfter then
+        -- keep old no-timeout behavior: do one last best-effort read instead of throwing timeout
+        local _, fallbackHumanoid = getCharacterHumanoid(1.5)
+        local fallbackDesc = getBestDescription(fallbackHumanoid)
+        if fallbackHumanoid and fallbackDesc then
+            local fallbackResult = descriptionToResult(fallbackHumanoid, fallbackDesc)
+            log("Done • fallback read • " .. #((fallbackResult.Accessories and fallbackResult.Accessories.Other) or {}) .. " accessories")
+            return fallbackResult
+        end
+        return {error = "Failed to read outfit"}
+    end
+
+    local result = descriptionToResult(humanoidAfter, descAfter)
+    log("Done • " .. #((result.Accessories and result.Accessories.Other) or {}) .. " accessories")
     return result
 end
 
@@ -484,12 +520,12 @@ local function processRequest(requestId, data)
 
     local success, err = pcall(function()
         local result = {}
-        local codes = data.codes or (data.code and { data.code }) or {}
+        local codes = data.codes or (data.code and {data.code}) or {}
 
         for i, hexCode in ipairs(codes) do
             local single = processSingleOutfit(hexCode, requesterName)
             result["outfit" .. i] = single
-            task.wait(0.5 + math.random(0, 50) / 1000)
+            task.wait(BETWEEN_OUTFITS_DELAY + math.random(0, 60)/1000)
         end
 
         task.wait(0.3)
@@ -499,7 +535,7 @@ local function processRequest(requestId, data)
 
     if not success then
         log("Error in processing: " .. tostring(err))
-        sendResult(requestId, { error = tostring(err) })
+        sendResult(requestId, {error = tostring(err)})
     end
 
     isProcessing = false
@@ -525,8 +561,7 @@ task.spawn(function()
         local requests = getRequests() or {}
 
         for id, data in pairs(requests) do
-            local codes = data.codes or (data.code and { data.code }) or {}
-
+            local codes = data.codes or (data.code and {data.code}) or {}
             if #codes > 0 and not data.result then
                 if tryClaim(id) then
                     task.spawn(processRequest, id, data)
@@ -546,13 +581,11 @@ task.spawn(function()
     while active do
         Player.Idled:Wait()
         if not active then break end
-
         log("Anti-AFK triggered")
         pcall(function()
             VirtualUser:CaptureController()
             VirtualUser:ClickButton2(Vector2.new())
         end)
-
         task.wait(285 + math.random(0, 30))
     end
 end)
