@@ -14,15 +14,15 @@ local PlayerGui = Player:WaitForChild("PlayerGui", 8)
 local FIREBASE_URL = "https://cacc-c57bf-default-rtdb.firebaseio.com/"
 local API_KEY = "AIzaSyBquxKffIm2lBtpi90GLLDdrQG_0yvlo4Y"
 
-local POLL_INTERVAL = 0.15
+local POLL_INTERVAL = 0.2
 local AUTH_REFRESH_MARGIN = 300
 local MAX_LOG_LINES = 120
 local CLAIM_TIMEOUT = 60
 
-local APPLY_WAIT_WINDOW = 2.6
-local APPLY_POLL_STEP = 0.05
-local APPLY_STABLE_POLLS = 1
-local BETWEEN_OUTFITS_DELAY = 0.12
+local APPLY_WAIT_WINDOW = 5.0
+local APPLY_POLL_STEP = 0.08
+local APPLY_STABLE_POLLS = 2
+local BETWEEN_OUTFITS_DELAY = 0.4
 
 local CommunityRemote = ReplicatedStorage:WaitForChild("CommunityOutfitsRemote", 8)
 local CatalogGuiRemote = ReplicatedStorage:WaitForChild("CatalogGuiRemote", 8)
@@ -337,28 +337,26 @@ local function getCharacterHumanoid(timeoutSeconds)
 				return character, humanoid
 			end
 		end
-		task.wait(0.03)
+		task.wait(0.05)
 	until tick() >= deadline
 
 	return nil, nil
 end
 
-local function getDescriptionSnapshot(humanoid)
-	if not humanoid then
-		return nil
-	end
+local function getHumanoidDescriptionObject(humanoid, timeoutSeconds)
+	local deadline = tick() + (timeoutSeconds or 2)
+	repeat
+		if not humanoid then
+			break
+		end
 
-	local success, description = pcall(function()
-		return humanoid:GetAppliedDescription()
-	end)
-	if success and description then
-		return description
-	end
+		local description = humanoid:FindFirstChild("HumanoidDescription")
+		if description and description:IsA("HumanoidDescription") then
+			return description
+		end
 
-	local child = humanoid:FindFirstChildOfClass("HumanoidDescription")
-	if child and child:IsA("HumanoidDescription") then
-		return child
-	end
+		task.wait(0.05)
+	until tick() >= deadline
 
 	return nil
 end
@@ -474,23 +472,10 @@ local function waitForFreshDescription(beforeFingerprint)
 	local lastChangedFingerprint = nil
 	local stablePolls = 0
 
-	local _, quickHumanoid = getCharacterHumanoid(0.35)
-	if quickHumanoid then
-		local quickDescription = getDescriptionSnapshot(quickHumanoid)
-		if quickDescription then
-			local quickFingerprint = buildDescriptionFingerprint(quickHumanoid, quickDescription)
-			bestHumanoid = quickHumanoid
-			bestDescription = quickDescription
-			if quickFingerprint ~= beforeFingerprint then
-				return quickHumanoid, quickDescription
-			end
-		end
-	end
-
 	repeat
-		local _, humanoid = getCharacterHumanoid(0.6)
+		local _, humanoid = getCharacterHumanoid(0.8)
 		if humanoid then
-			local description = getDescriptionSnapshot(humanoid)
+			local description = getHumanoidDescriptionObject(humanoid, 0.25)
 			if description then
 				local fingerprint = buildDescriptionFingerprint(humanoid, description)
 				bestHumanoid = humanoid
@@ -508,7 +493,7 @@ local function waitForFreshDescription(beforeFingerprint)
 					end
 
 					if stablePolls >= APPLY_STABLE_POLLS then
-						task.wait(0.02)
+						task.wait(0.08)
 						return changedHumanoid, changedDescription
 					end
 				end
@@ -593,7 +578,7 @@ local function processSingleOutfit(hexCode, requesterName)
 		return { error = "Humanoid not found" }
 	end
 
-	local beforeDescription = getDescriptionSnapshot(humanoidBefore)
+	local beforeDescription = getHumanoidDescriptionObject(humanoidBefore, 1.5)
 	if not beforeDescription then
 		return { error = "No HumanoidDescription" }
 	end
@@ -619,12 +604,12 @@ local function processSingleOutfit(hexCode, requesterName)
 		return { error = "Failed to wear outfit" }
 	end
 
-	task.wait(0.06)
+	task.wait(0.2)
 
 	local humanoidAfter, descriptionAfter = waitForFreshDescription(beforeFingerprint)
 	if not humanoidAfter or not descriptionAfter then
-		local _, fallbackHumanoid = getCharacterHumanoid(0.6)
-		local fallbackDescription = fallbackHumanoid and getDescriptionSnapshot(fallbackHumanoid) or nil
+		local _, fallbackHumanoid = getCharacterHumanoid(1.5)
+		local fallbackDescription = fallbackHumanoid and getHumanoidDescriptionObject(fallbackHumanoid, 0.5) or nil
 		if fallbackHumanoid and fallbackDescription then
 			local fallback = descriptionToResult(fallbackHumanoid, fallbackDescription)
 			log("Done - fallback read - " .. tostring(#(((fallback.Accessories or {}).Other) or {})) .. " accessories")
@@ -651,11 +636,11 @@ local function processRequest(requestId, data)
 		for index, hexCode in ipairs(codes) do
 			result["outfit" .. index] = processSingleOutfit(hexCode, requesterName)
 			if index < #codes then
-				task.wait(BETWEEN_OUTFITS_DELAY + math.random() * 0.04)
+				task.wait(BETWEEN_OUTFITS_DELAY + math.random() * 0.06)
 			end
 		end
 
-		task.wait(0.05)
+		task.wait(0.18)
 		forceResetCharacter()
 		sendResult(requestId, result)
 	end)
@@ -720,4 +705,4 @@ task.spawn(function()
 	end
 end)
 
-log("CAC ready - faster polling - streamlined outfit reads - 2026")
+log("CAC ready - original description reads with lighter speed tuning - 2026")
