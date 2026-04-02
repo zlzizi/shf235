@@ -14,15 +14,15 @@ local PlayerGui = Player:WaitForChild("PlayerGui", 8)
 local FIREBASE_URL = "https://cacc-c57bf-default-rtdb.firebaseio.com/"
 local API_KEY = "AIzaSyBquxKffIm2lBtpi90GLLDdrQG_0yvlo4Y"
 
-local POLL_INTERVAL = 0.2
+local POLL_INTERVAL = 0.15
 local AUTH_REFRESH_MARGIN = 300
 local MAX_LOG_LINES = 120
 local CLAIM_TIMEOUT = 60
 
-local APPLY_WAIT_WINDOW = 4.25
-local APPLY_POLL_STEP = 0.08
-local APPLY_STABLE_POLLS = 2
-local BETWEEN_OUTFITS_DELAY = 0.35
+local APPLY_WAIT_WINDOW = 2.6
+local APPLY_POLL_STEP = 0.05
+local APPLY_STABLE_POLLS = 1
+local BETWEEN_OUTFITS_DELAY = 0.12
 
 local CommunityRemote = ReplicatedStorage:WaitForChild("CommunityOutfitsRemote", 8)
 local CatalogGuiRemote = ReplicatedStorage:WaitForChild("CatalogGuiRemote", 8)
@@ -47,18 +47,6 @@ local function roundNumber(value, decimals)
 
 	local factor = 10 ^ (decimals or 3)
 	return math.floor(value * factor + 0.5) / factor
-end
-
-local function toVectorTable(value, decimals)
-	if typeof(value) ~= "Vector3" then
-		return nil
-	end
-
-	return {
-		x = roundNumber(value.X, decimals or 3),
-		y = roundNumber(value.Y, decimals or 3),
-		z = roundNumber(value.Z, decimals or 3),
-	}
 end
 
 local function optimizeGraphics()
@@ -349,7 +337,7 @@ local function getCharacterHumanoid(timeoutSeconds)
 				return character, humanoid
 			end
 		end
-		task.wait(0.05)
+		task.wait(0.03)
 	until tick() >= deadline
 
 	return nil, nil
@@ -402,20 +390,6 @@ local function serializeAccessories(description)
 		if accessory.Order ~= nil then
 			entry.order = tonumber(accessory.Order) or accessory.Order
 		end
-
-		local position = toVectorTable(accessory.Position, 3)
-		local rotation = toVectorTable(accessory.Rotation, 2)
-		local scale = toVectorTable(accessory.Scale, 3)
-
-		if position then
-			entry.position = position
-		end
-		if rotation then
-			entry.rotation = rotation
-		end
-		if scale then
-			entry.scale = scale
-		end
 		if accessory.Puffiness ~= nil then
 			entry.puffiness = roundNumber(tonumber(accessory.Puffiness) or 0, 3)
 		end
@@ -440,23 +414,11 @@ local function getAccessoryFingerprint(description)
 	local accessories = serializeAccessories(description)
 	local parts = {}
 	for _, accessory in ipairs(accessories) do
-		local position = accessory.position or { x = 0, y = 0, z = 0 }
-		local rotation = accessory.rotation or { x = 0, y = 0, z = 0 }
-		local scale = accessory.scale or { x = 1, y = 1, z = 1 }
 		parts[#parts + 1] = table.concat({
 			tostring(accessory.assetId or 0),
 			tostring(accessory.type or "Hat"),
 			tostring(accessory.isLayered and true or false),
 			tostring(accessory.order or 0),
-			tostring(position.x or 0),
-			tostring(position.y or 0),
-			tostring(position.z or 0),
-			tostring(rotation.x or 0),
-			tostring(rotation.y or 0),
-			tostring(rotation.z or 0),
-			tostring(scale.x or 1),
-			tostring(scale.y or 1),
-			tostring(scale.z or 1),
 		}, "|")
 	end
 
@@ -512,6 +474,19 @@ local function waitForFreshDescription(beforeFingerprint)
 	local lastChangedFingerprint = nil
 	local stablePolls = 0
 
+	local _, quickHumanoid = getCharacterHumanoid(0.35)
+	if quickHumanoid then
+		local quickDescription = getDescriptionSnapshot(quickHumanoid)
+		if quickDescription then
+			local quickFingerprint = buildDescriptionFingerprint(quickHumanoid, quickDescription)
+			bestHumanoid = quickHumanoid
+			bestDescription = quickDescription
+			if quickFingerprint ~= beforeFingerprint then
+				return quickHumanoid, quickDescription
+			end
+		end
+	end
+
 	repeat
 		local _, humanoid = getCharacterHumanoid(0.6)
 		if humanoid then
@@ -533,7 +508,7 @@ local function waitForFreshDescription(beforeFingerprint)
 					end
 
 					if stablePolls >= APPLY_STABLE_POLLS then
-						task.wait(0.05)
+						task.wait(0.02)
 						return changedHumanoid, changedDescription
 					end
 				end
@@ -644,11 +619,11 @@ local function processSingleOutfit(hexCode, requesterName)
 		return { error = "Failed to wear outfit" }
 	end
 
-	task.wait(0.12)
+	task.wait(0.06)
 
 	local humanoidAfter, descriptionAfter = waitForFreshDescription(beforeFingerprint)
 	if not humanoidAfter or not descriptionAfter then
-		local _, fallbackHumanoid = getCharacterHumanoid(1)
+		local _, fallbackHumanoid = getCharacterHumanoid(0.6)
 		local fallbackDescription = fallbackHumanoid and getDescriptionSnapshot(fallbackHumanoid) or nil
 		if fallbackHumanoid and fallbackDescription then
 			local fallback = descriptionToResult(fallbackHumanoid, fallbackDescription)
@@ -676,11 +651,11 @@ local function processRequest(requestId, data)
 		for index, hexCode in ipairs(codes) do
 			result["outfit" .. index] = processSingleOutfit(hexCode, requesterName)
 			if index < #codes then
-				task.wait(BETWEEN_OUTFITS_DELAY + math.random() * 0.08)
+				task.wait(BETWEEN_OUTFITS_DELAY + math.random() * 0.04)
 			end
 		end
 
-		task.wait(0.12)
+		task.wait(0.05)
 		forceResetCharacter()
 		sendResult(requestId, result)
 	end)
@@ -745,4 +720,4 @@ task.spawn(function()
 	end
 end)
 
-log("CAC ready - faster polling - accessory transforms preserved - 2026")
+log("CAC ready - faster polling - streamlined outfit reads - 2026")
